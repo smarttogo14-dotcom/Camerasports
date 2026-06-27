@@ -329,80 +329,133 @@
         },
 
         // ── SIT-UPS ──────────────────────────────────────────────────────────
-        // Approach: Trunk angle (hip-shoulder relative to vertical).
-        // Lying flat: shoulders and hips at similar Y.
-        // Sitting up: shoulder Y rises significantly above hip Y.
-        // Also use hip-shoulder-nose angle as trunk curl indicator.
+        // KEY INSIGHT: When lying down MoveNet struggles with hips/shoulders.
+        // Strategy: use NOSE Y as the primary anchor — the face is always visible.
+        // When flat: nose is at a certain Y level (high on screen if camera above,
+        //   or in center if camera is at side).
+        // When sitting up: nose rises significantly (camera above) OR
+        //   the nose-to-shoulder vertical gap shrinks (body goes upright).
+        //
+        // We use a MULTI-SIGNAL approach and take the MAX so any one signal
+        // firing is enough. Confidence thresholds are kept very low.
+        // "Pose verloren" is avoided by only returning null if ALL signals are bad.
         situp: {
             name: 'Situps',
             icon: '🔄',
             labels: {
-                calib: 'Flach hinlegen — Startposition (unten)',
-                down:  'Hoch ↑',
-                up:    'Runter ↓',
-                bar1:  'Schulter-Lift',
-                bar2:  'Rumpf-Winkel',
+                calib: 'Flach hinlegen & Kamera von der Seite oder von oben',
+                down:  'Hoch ↑ — aufrichten!',
+                up:    'Runter ↓ — hinlegen!',
+                bar1:  'Nase / Schulter-Lift',
+                bar2:  'Rumpf-Streckung',
             },
-            thresholds: { down: 0.42, up: 0.10 },
-            MIN_CONF: 0.20,
+            thresholds: { down: 0.38, up: 0.09 },
+            MIN_CONF: 0.12,   // very low — lying down reduces confidence a lot
+
+            // Helper: get best-available Y for a pair of keypoints (picks the one with higher conf)
+            _bestY(a, b, minConf) {
+                const aOk = a?.score >= minConf, bOk = b?.score >= minConf;
+                if (aOk && bOk) return (a.y + b.y) / 2;
+                if (aOk) return a.y;
+                if (bOk) return b.y;
+                return null;
+            },
 
             calibrate(kp, vidW, vidH) {
-                const lSh = kp[5], rSh = kp[6];
-                const lHi = kp[11], rHi = kp[12];
-                const nose = kp[0];
-                if (!validPts([lSh, rSh, lHi, rHi], this.MIN_CONF)) return null;
-                const shY  = (lSh.y + rSh.y) / 2 / vidH;
-                const hiY  = (lHi.y + rHi.y) / 2 / vidH;
-                const shX  = (lSh.x + rSh.x) / 2 / vidW;
-                const hiX  = (lHi.x + rHi.x) / 2 / vidW;
-                // body must be somewhat horizontal (shY close to hiY)
-                // The difference may be small when lying flat
+                const nose  = kp[0];
+                const lSh   = kp[5], rSh = kp[6];
+                const lHi   = kp[11], rHi = kp[12];
+                const lKn   = kp[13], rKn = kp[14];
+
+                const noseOk = nose?.score >= this.MIN_CONF;
+                const shY    = this._bestY(lSh, rSh, this.MIN_CONF);
+                const hiY    = this._bestY(lHi, rHi, this.MIN_CONF);
+                const knY    = this._bestY(lKn, rKn, this.MIN_CONF);
+
+                // Need at least nose OR shoulders
+                if (!noseOk && shY === null) return null;
+
                 return {
-                    shY, hiY, shX, hiX,
-                    bodyLen: Math.sqrt((shX - hiX)**2 + (shY - hiY)**2), // normalized
-                    noseY: (nose?.score > 0.2 ? nose.y / vidH : shY - 0.05),
+                    noseY:  noseOk ? nose.y / vidH : (shY !== null ? shY / vidH - 0.05 : 0.3),
+                    shY:    shY !== null ? shY / vidH : null,
+                    hiY:    hiY !== null ? hiY / vidH : null,
+                    knY:    knY !== null ? knY / vidH : null,
+                    // reference distance: shoulder-to-knee when lying (body length)
+                    bodySpan: (shY !== null && knY !== null)
+                        ? Math.abs(knY - shY) / vidH
+                        : 0.4, // fallback estimate
                 };
             },
 
             getScore(kp, b, vidW, vidH) {
-                const lSh = kp[5], rSh = kp[6];
-                const lHi = kp[11], rHi = kp[12];
-                const nose = kp[0];
-                if (!validPts([lSh, rSh, lHi, rHi], this.MIN_CONF)) return null;
-                const shY  = (lSh.y + rSh.y) / 2 / vidH;
-                const hiY  = (lHi.y + rHi.y) / 2 / vidH;
-                const noseY = (nose?.score > 0.2 ? nose.y / vidH : shY - 0.05);
+                const nose  = kp[0];
+                const lSh   = kp[5], rSh = kp[6];
+                const lHi   = kp[11], rHi = kp[12];
+                const lKn   = kp[13], rKn = kp[14];
 
-                // Sitting up = shoulders rise above calibration baseline
-                // If camera overhead: shoulders move toward hips in Y
-                // If camera side: shoulders Y changes significantly
-                const shLift = Math.max(0, b.shY - shY) / 0.12; // rise relative to baseline
+                const noseOk = nose?.score >= this.MIN_CONF;
+                const shY    = this._bestY(lSh, rSh, this.MIN_CONF);
+                const hiY    = this._bestY(lHi, rHi, this.MIN_CONF);
+                const knY    = this._bestY(lKn, rKn, this.MIN_CONF);
 
-                // Hip-shoulder gap change: when curling, shoulders get closer to hips
-                const curGap   = Math.abs(shY - hiY);
-                const baseGap  = Math.abs(b.shY - b.hiY);
-                // Avoid division by zero; gap shrinks when sitting up (camera from side)
-                const gapSig   = baseGap > 0.01
-                    ? Math.max(0, (baseGap - curGap) / baseGap)
-                    : 0;
+                // If literally nothing is visible, bail
+                if (!noseOk && shY === null && hiY === null) return null;
 
-                // Nose-to-hip drop: nose approaches hips when curling
-                const noseLift = Math.max(0, b.noseY - noseY) / 0.10;
+                let sig1 = 0, sig2 = 0;
 
-                const score = Math.max(shLift, noseLift) * 0.6 + gapSig * 0.4;
+                // ── SIGNAL 1: Nose/shoulder upward movement ──────────────────
+                // When sitting up the upper body RISES (Y decreases in image coords
+                // if camera is to the side, or comes toward center if camera above).
+                // We measure Y drop from calibration baseline.
+                if (noseOk && b.noseY !== null) {
+                    const noseRise = Math.max(0, b.noseY - nose.y / vidH);
+                    // normalize: a rise of ~15% of screen height = full signal
+                    sig1 = Math.max(sig1, noseRise / 0.14);
+                }
+                if (shY !== null && b.shY !== null) {
+                    const shRise = Math.max(0, b.shY - shY / vidH);
+                    sig1 = Math.max(sig1, shRise / 0.12);
+                }
+
+                // ── SIGNAL 2: Body compaction / trunk curl ────────────────────
+                // When lying flat: shoulder-to-knee span is large.
+                // When sitting up: body folds → span shrinks (side cam).
+                // Also: shoulder-to-hip gap changes.
+                if (shY !== null && knY !== null && b.bodySpan > 0.05) {
+                    const curSpan = Math.abs(knY / vidH - shY / vidH);
+                    const spanShrink = Math.max(0, (b.bodySpan - curSpan) / b.bodySpan);
+                    sig2 = Math.max(sig2, spanShrink);
+                }
+                if (shY !== null && hiY !== null && b.shY !== null && b.hiY !== null) {
+                    const baseGap = Math.abs(b.hiY - b.shY);
+                    const curGap  = Math.abs(hiY / vidH - shY / vidH);
+                    if (baseGap > 0.01) {
+                        sig2 = Math.max(sig2, Math.max(0, (baseGap - curGap) / baseGap));
+                    }
+                }
+
+                // Take the strongest combination
+                const score = sig1 * 0.65 + sig2 * 0.35;
+
+                const confPts = [nose, lSh, rSh, lHi, rHi].filter(p => p?.score >= this.MIN_CONF);
+                const conf = confPts.length > 0
+                    ? confPts.reduce((s, p) => s + p.score, 0) / confPts.length
+                    : 0.15;
+
                 return {
                     score: Math.min(1, Math.max(0, score)),
-                    sig1: Math.min(1, Math.max(shLift, noseLift)),
-                    sig2: Math.min(1, gapSig),
-                    conf: avgConf([lSh, rSh, lHi, rHi]),
+                    sig1: Math.min(1, sig1),
+                    sig2: Math.min(1, sig2),
+                    conf,
                 };
             },
 
             confKeypoints(kp) {
                 return {
-                    'L Schulter': kp[5], 'R Schulter': kp[6],
-                    'L Hüfte':    kp[11], 'R Hüfte':   kp[12],
                     'Nase':       kp[0],
+                    'L Schulter': kp[5], 'R Schulter': kp[6],
+                    'L Hüfte':   kp[11], 'R Hüfte':   kp[12],
+                    'L Knie':    kp[13],
                 };
             },
         },
@@ -650,6 +703,11 @@
                 const vW = lastPoses[0]._vW || 640, vH = lastPoses[0]._vH || 480;
                 const b  = EXERCISES[selectedEx].calibrate(kp, vW, vH);
                 cdPoseOk = !!b;
+                // For situps, also accept if just nose or shoulders are visible
+                if (!cdPoseOk && selectedEx === 'situp') {
+                    const nose = kp[0], lSh = kp[5], rSh = kp[6];
+                    cdPoseOk = (nose?.score >= 0.12) || (lSh?.score >= 0.12) || (rSh?.score >= 0.12);
+                }
             }
             poseEl.textContent  = cdPoseOk ? '✓ Pose erkannt' : '✗ Pose nicht erkannt';
             poseEl.className    = 'cd-pose-check ' + (cdPoseOk ? 'ok' : 'bad');
@@ -801,7 +859,7 @@
 
                     const ex  = EXERCISES[selectedEx];
                     const res = ex.getScore(poses[0].keypoints, baseline, vW, vH);
-                    if (!res) { setStatus('Pose verloren — neu kalibrieren?', '#ff9600'); return; }
+                    if (!res) { window._poseLostCount = (window._poseLostCount||0)+1; if (window._poseLostCount > 10) setStatus('Körper nicht klar sichtbar — Kamera weiter weg?', '#ff9600'); return; } window._poseLostCount = 0;
 
                     const { score, sig1, sig2, conf } = res;
 
