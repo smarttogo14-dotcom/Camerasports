@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Übungs-Zähler</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: sans-serif; background: #111; color: #fff; min-height: 100vh; padding: 1rem; }
+        #app { max-width: 520px; margin: 0 auto; padding: 1rem 0; }
+
+        /* ── EXERCISE PICKER ── */
+        #picker { margin-bottom: 1.5rem; }
+        #picker h2 { font-size: 13px; color: #555; font-weight: 400; margin-bottom: 10px; letter-spacing: 0.05em; text-transform: uppercase; }
+        #ex-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+        .ex-btn {
+            padding: 14px 8px; border-radius: 10px; border: 0.5px solid #333;
+            background: #1a1a1a; color: #aaa; font-size: 13px; cursor: pointer;
+            display: flex; flex-direction: column; align-items: center; gap: 6px;
+            transition: all 0.15s;
+        }
+        .ex-btn .ex-icon { font-size: 1.6rem; }
+        .ex-btn:hover { border-color: #555; color: #fff; background: #222; }
+        .ex-btn.selected { border-color: #378add; color: #378add; background: rgba(55,138,221,0.1); }
+
+        /* ── CAM ── */
+        #cam-wrap { position: relative; width: 100%; aspect-ratio: 4/3; background: #000; border-radius: 12px; overflow: hidden; margin-bottom: 1rem; }
+        #v { width: 100%; height: 100%; object-fit: cover; display: block; transform: scaleX(-1); }
+        #overlay { position: absolute; inset: 0; pointer-events: none; transform: scaleX(-1); width: 100%; height: 100%; }
+
+        #counter-badge {
+            position: absolute; top: 12px; right: 12px;
+            width: 72px; height: 72px;
+            display: flex; align-items: center; justify-content: center; flex-direction: column;
+            z-index: 10;
+        }
+        #ring-svg { position: absolute; inset: 0; width: 100%; height: 100%; transform-origin: center center; will-change: transform, filter; }
+        #count-num { font-size: 1.6rem; font-weight: 600; color: #fff; line-height: 1; position: relative; z-index: 1; }
+        #count-label { font-size: 10px; color: rgba(255,255,255,0.55); position: relative; z-index: 1; }
+
+        #status-pill {
+            position: absolute; bottom: 12px; left: 12px;
+            background: rgba(0,0,0,0.6); border-radius: 20px;
+            padding: 4px 12px; font-size: 12px; color: rgba(255,255,255,0.8);
+        }
+        #ex-badge {
+            position: absolute; top: 12px; left: 12px;
+            background: rgba(0,0,0,0.6); border-radius: 20px;
+            padding: 4px 12px; font-size: 12px; color: rgba(255,255,255,0.7);
+            display: none;
+        }
+        #debug-box {
+            position: absolute; bottom: 40px; left: 12px;
+            background: rgba(0,0,0,0.65); border-radius: 8px;
+            padding: 6px 10px; font-size: 11px;
+            color: rgba(255,255,255,0.75); line-height: 1.8;
+            display: none;
+        }
+
+        /* ── DEPTH BAR ── */
+        #depth-track { width: 100%; height: 5px; background: #222; border-radius: 3px; margin-top: -6px; margin-bottom: 10px; overflow: hidden; }
+        #depth-fill { height: 100%; width: 0%; border-radius: 3px; background: linear-gradient(90deg, #378add, #9b59b6); transition: width 0.08s; }
+
+        /* ── CONTROLS ── */
+        button.main {
+            width: 100%; padding: 10px; border-radius: 8px; font-size: 14px;
+            cursor: pointer; margin-bottom: 0.75rem;
+            background: transparent; color: #fff; border: 0.5px solid #555;
+        }
+        button.main:hover { background: #1a1a1a; }
+        button.main:disabled { opacity: 0.5; cursor: default; }
+        button.main.accent { border-color: #378add; color: #378add; }
+        button.main.accent:hover { background: rgba(55,138,221,0.1); }
+        #calib-hint { font-size: 12px; color: #666; margin-bottom: 0.75rem; line-height: 1.5; display: none; }
+
+        .phase-indicator { display: flex; gap: 8px; margin-bottom: 1rem; }
+        .phase-dot { flex: 1; padding: 6px; border-radius: 6px; text-align: center; font-size: 12px; background: #1a1a1a; color: #555; border: 0.5px solid #333; transition: all 0.2s; }
+        .phase-dot.active { background: #0c447c; color: #85b7eb; border-color: #378add; }
+        .phase-dot.done   { background: #0f3d1a; color: #4caf50; border-color: #4caf50; }
+
+        /* ── BARS ── */
+        #bar-section { margin-bottom: 1rem; }
+        .bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+        .bar-label { font-size: 12px; color: #aaa; min-width: 120px; }
+        .bar-bg { flex: 1; height: 10px; background: #222; border-radius: 5px; border: 0.5px solid #333; overflow: hidden; }
+        .bar-fill { height: 100%; width: 0%; border-radius: 5px; transition: width 0.08s; }
+        .bar-val { font-size: 12px; color: #aaa; min-width: 36px; text-align: right; }
+    </style>
+</head>
+<body>
+<div id="app">
+
+    <!-- EXERCISE PICKER -->
+    <div id="picker">
+        <h2>Übung wählen</h2>
+        <div id="ex-grid">
+            <button class="ex-btn selected" data-ex="pushup">
+                <span class="ex-icon">💪</span>Liegestütz
+            </button>
+            <button class="ex-btn" data-ex="situp">
+                <span class="ex-icon">🔄</span>Situps
+            </button>
+            <button class="ex-btn" data-ex="squat">
+                <span class="ex-icon">🦵</span>Kniebeuge
+            </button>
+        </div>
+    </div>
+
+    <!-- CAM -->
+    <div id="cam-wrap">
+        <video id="v" autoplay playsinline muted></video>
+        <canvas id="overlay"></canvas>
+        <div id="counter-badge">
+            <svg id="ring-svg" viewBox="0 0 72 72" xmlns="http://www.w3.org/2000/svg">
+                <circle id="ring-circle" cx="36" cy="36" r="32" fill="rgba(0,0,0,0.6)" stroke="#378add" stroke-width="4"/>
+            </svg>
+            <span id="count-num">0</span>
+            <span id="count-label">reps</span>
+        </div>
+        <div id="ex-badge"></div>
+        <div id="status-pill">Übung wählen & Kamera starten</div>
+        <div id="debug-box">
+            <div>Score: <span id="d-score">—</span></div>
+            <div>Phase: <span id="d-phase">—</span></div>
+        </div>
+    </div>
+    <div id="depth-track"><div id="depth-fill"></div></div>
+
+    <button class="main" id="start-btn">Kamera starten</button>
+    <div id="calib-hint"></div>
+    <button class="main accent" id="calib-btn" style="display:none">Kalibrieren</button>
+    <div class="phase-indicator" id="phases" style="display:none">
+        <div class="phase-dot" id="ph-calib">Kalibriert</div>
+        <div class="phase-dot" id="ph-down">↓</div>
+        <div class="phase-dot" id="ph-up">↑</div>
+    </div>
+    <div id="bar-section">
+        <div class="bar-row">
+            <span class="bar-label" id="bar1-label">Signal 1</span>
+            <div class="bar-bg"><div class="bar-fill" id="bar1" style="background:#378add"></div></div>
+            <span class="bar-val" id="val1">—</span>
+        </div>
+        <div class="bar-row">
+            <span class="bar-label" id="bar2-label">Signal 2</span>
+            <div class="bar-bg"><div class="bar-fill" id="bar2" style="background:#9b59b6"></div></div>
+            <span class="bar-val" id="val2">—</span>
+        </div>
+        <div class="bar-row">
+            <span class="bar-label">Gesamt-Score</span>
+            <div class="bar-bg"><div class="bar-fill" id="bar-score" style="background:#4caf50"></div></div>
+            <span class="bar-val" id="val-score">—</span>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.min.js"></script>
+<script>
+(async () => {
+    // ─────────────────────────────────────────────────────────────────────────
+    // EXERCISE DEFINITIONS
+    // Each exercise exposes:
+    //   calibrate(kp, vidW, vidH)  → baseline object | null
+    //   getScore(kp, baseline, vidW, vidH) → { score, sig1, sig2 } | null
+    //     score: 0 = top position, 1 = fully in "down" position
+    //   thresholds: { down, up }   (score values)
+    //   labels: { calib, down, up, bar1, bar2 }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    const EXERCISES = {
+
+        pushup: {
+            name: 'Liegestütz',
+            icon: '💪',
+            labels: {
+                calib: 'Arme gestreckt halten (obere Position)',
+                down:  'Runter ↓',
+                up:    'Hoch ↑',
+                bar1:  'Ellbogen-Spreizung',
+                bar2:  'Schulter-Absenkung',
+            },
+            thresholds: { down: 0.38, up: 0.10 },
+
+            calibrate(kp) {
+                const lSh = kp[5], rSh = kp[6], lEl = kp[7], rEl = kp[8];
+                if (!this._valid([lSh,rSh,lEl,rEl], 0.3)) return null;
+                const shoulderPx = Math.abs(lSh.x - rSh.x);
+                if (shoulderPx < 20) return null;
+                return {
+                    elbowNorm: Math.abs(lEl.x - rEl.x) / shoulderPx,
+                    shoulderY: (lSh.y + rSh.y) / 2,
+                    shoulderPx,
+                };
+            },
+
+            getScore(kp, b, vidW, vidH) {
+                const lSh = kp[5], rSh = kp[6], lEl = kp[7], rEl = kp[8];
+                if (!this._valid([lSh,rSh,lEl,rEl], 0.3)) return null;
+                const shoulderPx = Math.abs(lSh.x - rSh.x);
+                if (shoulderPx < 20) return null;
+                const elbowDelta    = (Math.abs(lEl.x - rEl.x) / shoulderPx) - b.elbowNorm;
+                const shoulderDelta = ((lSh.y + rSh.y) / 2 - b.shoulderY) / vidH;
+                const score = elbowDelta * 0.75 + shoulderDelta * 0.25;
+                return {
+                    score,
+                    sig1: Math.min(1, Math.max(0, elbowDelta / this.thresholds.down)),
+                    sig2: Math.min(1, Math.max(0, shoulderDelta / 0.04)),
+                };
+            },
+
+            _valid(pts, minScore) {
+                return pts.every(p => p && p.score >= minScore);
+            },
+        },
+
+        situp: {
+            name: 'Situps',
+            icon: '🔄',
+            labels: {
+                calib: 'Flach auf den Boden legen (untere Position)',
+                down:  'Hoch ↑',
+                up:    'Runter ↓',
+                bar1:  'Schulter-Lift',
+                bar2:  'Hüft-Winkel',
+            },
+            thresholds: { down: 0.40, up: 0.08 },
+
+            calibrate(kp, vidW, vidH) {
+                const lSh = kp[5], rSh = kp[6], lHi = kp[11], rHi = kp[12];
+                if (!this._valid([lSh,rSh,lHi,rHi], 0.25)) return null;
+                return {
+                    shoulderY: (lSh.y + rSh.y) / 2 / vidH,
+                    hipY:      (lHi.y + rHi.y) / 2 / vidH,
+                };
+            },
+
+            getScore(kp, b, vidW, vidH) {
+                const lSh = kp[5], rSh = kp[6], lHi = kp[11], rHi = kp[12];
+                if (!this._valid([lSh,rSh,lHi,rHi], 0.25)) return null;
+                const shY  = (lSh.y + rSh.y) / 2 / vidH;
+                const hipY = (lHi.y + rHi.y) / 2 / vidH;
+                // When sitting up, shoulders rise → shY decreases from baseline
+                const shoulderLift = Math.max(0, b.shoulderY - shY);
+                // Hip-shoulder distance shrinks when curling up
+                const baseGap = b.shoulderY - b.hipY;  // negative (shoulders above hips when lying)
+                const curGap  = shY - hipY;
+                const hipSig  = baseGap !== 0 ? Math.max(0, (baseGap - curGap) / Math.abs(baseGap)) : 0;
+                const score   = shoulderLift * 0.6 + hipSig * 0.4;
+                return {
+                    score,
+                    sig1: Math.min(1, shoulderLift / this.thresholds.down),
+                    sig2: Math.min(1, hipSig),
+                };
+            },
+
+            _valid(pts, minScore) {
+                return pts.every(p => p && p.score >= minScore);
+            },
+        },
+
+        squat: {
+            name: 'Kniebeuge',
+            icon: '🦵',
+            labels: {
+                calib: 'Aufrecht stehen (obere Position)',
+                down:  'Runter ↓',
+                up:    'Hoch ↑',
+                bar1:  'Hüft-Absenkung',
+                bar2:  'Knie-Beugung',
+            },
+            thresholds: { down: 0.38, up: 0.08 },
+
+            calibrate(kp, vidW, vidH) {
+                const lHi = kp[11], rHi = kp[12], lKn = kp[13], rKn = kp[14];
+                if (!this._valid([lHi,rHi,lKn,rKn], 0.25)) return null;
+                return {
+                    hipY:  (lHi.y + rHi.y) / 2 / vidH,
+                    kneeY: (lKn.y + rKn.y) / 2 / vidH,
+                    // knee-hip distance at standing
+                    kneeHipDist: ((lKn.y + rKn.y) / 2 - (lHi.y + rHi.y) / 2) / vidH,
+                };
+            },
+
+            getScore(kp, b, vidW, vidH) {
+                const lHi = kp[11], rHi = kp[12], lKn = kp[13], rKn = kp[14];
+                if (!this._valid([lHi,rHi,lKn,rKn], 0.25)) return null;
+                const hipY  = (lHi.y + rHi.y) / 2 / vidH;
+                const kneeY = (lKn.y + rKn.y) / 2 / vidH;
+                // Hip drops when squatting → hipY increases
+                const hipDrop   = Math.max(0, hipY - b.hipY);
+                // Knee-hip gap shrinks (knees come up relative to hips)
+                const curGap    = kneeY - hipY;
+                const kneeSig   = b.kneeHipDist > 0
+                    ? Math.max(0, (b.kneeHipDist - curGap) / b.kneeHipDist)
+                    : 0;
+                const score = hipDrop * 0.6 + kneeSig * 0.4;
+                return {
+                    score,
+                    sig1: Math.min(1, hipDrop / this.thresholds.down),
+                    sig2: Math.min(1, kneeSig),
+                };
+            },
+
+            _valid(pts, minScore) {
+                return pts.every(p => p && p.score >= minScore);
+            },
+        },
+    };
+
+    // ── State ────────────────────────────────────────────────────────────────
+    let selectedEx   = 'pushup';
+    let count        = 0;
+    let isDown       = false;
+    let detector     = null;
+    let running      = false;
+    let calibrated   = false;
+    let baseline     = null;
+    let lastPoses    = null;
+
+    // ── Ring rAF ─────────────────────────────────────────────────────────────
+    const svg    = document.getElementById('ring-svg');
+    const circle = document.getElementById('ring-circle');
+    let targetDepth = 0, smoothDepth = 0, flashT = 0;
+    const FLASH_MS = 550, LERP = 0.18;
+
+    function applyRing(depth, flash) {
+        let scale, glow, r, g, b;
+        if (flash > 0) {
+            const e = 1 - Math.pow(flash, 3);
+            scale = 1.45 - e * 0.45;
+            glow  = flash * 18;
+            r = Math.round(76  + (55  - 76)  * e);
+            g = Math.round(175 + (138 - 175) * e);
+            b = Math.round(80  + (221 - 80)  * e);
+        } else {
+            scale = 1 + depth * 0.45;
+            glow  = depth * 14;
+            r = Math.round(55  + depth * 200);
+            g = Math.round(138 - depth * 80);
+            b = Math.round(221 - depth * 180);
+        }
+        const col = `rgb(${r},${g},${b})`;
+        svg.style.transform = `scale(${scale.toFixed(4)})`;
+        svg.style.filter    = `drop-shadow(0 0 ${glow.toFixed(1)}px ${col})`;
+        circle.setAttribute('stroke', col);
+        circle.setAttribute('stroke-width', (4 + (flash > 0 ? flash : depth) * 3).toFixed(1));
+    }
+
+    let lastTs = null;
+    (function rafLoop(ts) {
+        requestAnimationFrame(rafLoop);
+        const dt = lastTs ? Math.min(ts - lastTs, 100) : 16;
+        lastTs = ts;
+        smoothDepth += (targetDepth - smoothDepth) * LERP;
+        if (flashT > 0) flashT = Math.max(0, flashT - dt / FLASH_MS);
+        applyRing(smoothDepth, flashT);
+    })();
+
+    function triggerFlash() { flashT = 1; }
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    function setStatus(msg, color) {
+        const p = document.getElementById('status-pill');
+        p.textContent = msg;
+        p.style.color = color || 'rgba(255,255,255,0.8)';
+    }
+
+    function setPhase(phase) {
+        document.getElementById('ph-calib').className = 'phase-dot' + (calibrated ? ' done' : '');
+        document.getElementById('ph-down').className  = 'phase-dot' + (phase === 'down' ? ' active' : '');
+        document.getElementById('ph-up').className    = 'phase-dot' + (phase === 'up'   ? ' active' : '');
+    }
+
+    function updateUI() {
+        document.getElementById('count-num').textContent = count;
+    }
+
+    function applyExerciseLabels() {
+        const ex = EXERCISES[selectedEx];
+        document.getElementById('bar1-label').textContent = ex.labels.bar1;
+        document.getElementById('bar2-label').textContent = ex.labels.bar2;
+        document.getElementById('calib-hint').textContent = ex.labels.calib;
+        document.getElementById('ex-badge').textContent  = ex.icon + ' ' + ex.name;
+    }
+
+    function drawSkeleton(canvas, poses, vidW, vidH) {
+        const ctx = canvas.getContext('2d');
+        canvas.width = vidW; canvas.height = vidH;
+        ctx.clearRect(0, 0, vidW, vidH);
+        if (!poses.length) return;
+        const kp = poses[0].keypoints;
+        const pairs = [[5,7],[7,9],[6,8],[8,10],[5,6],[11,12],[5,11],[6,12],[11,13],[13,15],[12,14],[14,16]];
+        ctx.strokeStyle = 'rgba(55,138,221,0.7)'; ctx.lineWidth = 2;
+        pairs.forEach(([i,j]) => {
+            const a = kp[i], b = kp[j];
+            if (a && b && a.score > 0.25 && b.score > 0.25) {
+                ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+            }
+        });
+        kp.forEach(p => {
+            if (p && p.score > 0.25) {
+                ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, 2*Math.PI);
+                ctx.fillStyle = '#fff'; ctx.fill();
+                ctx.strokeStyle = '#378add'; ctx.lineWidth = 2; ctx.stroke();
+            }
+        });
+    }
+
+    // ── Exercise picker ───────────────────────────────────────────────────────
+    document.querySelectorAll('.ex-btn').forEach(btn => {
+        btn.onclick = () => {
+            if (running) return; // lock once started
+            document.querySelectorAll('.ex-btn').forEach(b => b.classList.remove('selected'));
+            btn.classList.add('selected');
+            selectedEx = btn.dataset.ex;
+            applyExerciseLabels();
+            // reset
+            calibrated = false; baseline = null;
+            count = 0; isDown = false;
+            targetDepth = 0; smoothDepth = 0;
+            updateUI();
+            document.getElementById('calib-btn').textContent = 'Kalibrieren';
+            document.getElementById('calib-btn').style.borderColor = '';
+            document.getElementById('calib-btn').style.color = '';
+        };
+    });
+
+    // ── Calibrate ─────────────────────────────────────────────────────────────
+    document.getElementById('calib-btn').onclick = () => {
+        if (!lastPoses || !lastPoses.length) { setStatus('Kein Körper erkannt', 'orange'); return; }
+        const kp = lastPoses[0].keypoints;
+        const vW = lastPoses[0]._vW || 640, vH = lastPoses[0]._vH || 480;
+        const ex = EXERCISES[selectedEx];
+        const b  = ex.calibrate(kp, vW, vH);
+        if (!b) { setStatus('Pose nicht erkannt — näher zur Kamera', 'orange'); return; }
+        baseline   = b;
+        calibrated = true;
+        targetDepth = 0; smoothDepth = 0;
+        document.getElementById('calib-btn').textContent    = 'Neu kalibrieren';
+        document.getElementById('calib-btn').style.borderColor = '#4caf50';
+        document.getElementById('calib-btn').style.color       = '#4caf50';
+        setPhase(null);
+        setStatus('Kalibriert — los geht\'s!', '#4caf50');
+        setTimeout(() => setStatus('Bereit'), 1500);
+    };
+
+    // ── Start camera ──────────────────────────────────────────────────────────
+    document.getElementById('start-btn').onclick = async () => {
+        if (running) return;
+        const btn = document.getElementById('start-btn');
+        btn.disabled = true; btn.textContent = 'Startet…';
+        count = 0; updateUI();
+        applyExerciseLabels();
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+            const v = document.getElementById('v');
+            v.srcObject = stream;
+            await new Promise(r => v.onloadedmetadata = r);
+            setStatus('Modell lädt…');
+            detector = await poseDetection.createDetector(
+                poseDetection.SupportedModels.MoveNet,
+                { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING }
+            );
+            setStatus('Kalibrieren nicht vergessen!');
+            btn.textContent = 'Läuft…';
+            running = true;
+
+            // Lock exercise picker
+            document.querySelectorAll('.ex-btn').forEach(b => b.disabled = true);
+
+            document.getElementById('calib-hint').style.display = '';
+            document.getElementById('calib-btn').style.display  = '';
+            document.getElementById('debug-box').style.display  = '';
+            document.getElementById('phases').style.display     = '';
+            document.getElementById('ex-badge').style.display   = '';
+
+            setInterval(async () => {
+                if (!detector) return;
+                try {
+                    const poses = await detector.estimatePoses(v);
+                    const vW = v.videoWidth || 640, vH = v.videoHeight || 480;
+                    drawSkeleton(document.getElementById('overlay'), poses, vW, vH);
+                    if (!poses.length) { setStatus('Kein Körper sichtbar'); return; }
+                    poses[0]._vW = vW; poses[0]._vH = vH;
+                    lastPoses = poses;
+
+                    if (!calibrated) return;
+
+                    const ex  = EXERCISES[selectedEx];
+                    const res = ex.getScore(poses[0].keypoints, baseline, vW, vH);
+                    if (!res) return;
+
+                    const { score, sig1, sig2 } = res;
+                    const { down: T_DOWN, up: T_UP } = ex.thresholds;
+
+                    targetDepth = Math.min(1, Math.max(0, score / T_DOWN));
+                    document.getElementById('depth-fill').style.width = (targetDepth * 100).toFixed(1) + '%';
+
+                    document.getElementById('bar1').style.width  = (sig1 * 100).toFixed(1) + '%';
+                    document.getElementById('val1').textContent  = Math.round(sig1 * 100) + '%';
+                    document.getElementById('bar2').style.width  = (sig2 * 100).toFixed(1) + '%';
+                    document.getElementById('val2').textContent  = Math.round(sig2 * 100) + '%';
+                    document.getElementById('bar-score').style.width = (targetDepth * 100).toFixed(1) + '%';
+                    document.getElementById('val-score').textContent = Math.round(targetDepth * 100) + '%';
+
+                    document.getElementById('d-score').textContent = score.toFixed(3);
+                    document.getElementById('d-phase').textContent = isDown ? 'unten' : 'oben';
+
+                    if (score > T_DOWN && !isDown) {
+                        isDown = true;
+                        setPhase('down');
+                        setStatus(ex.labels.down, '#378add');
+                    }
+                    if (score < T_UP && isDown) {
+                        isDown = false; count++;
+                        updateUI();
+                        triggerFlash();
+                        setPhase('up');
+                        setStatus('Rep ' + count + '! ✓', '#4caf50');
+                        setTimeout(() => { setPhase(null); setStatus('Bereit'); }, 900);
+                    }
+
+                } catch(e) {}
+            }, 120);
+
+        } catch(e) {
+            btn.disabled = false; btn.textContent = 'Kamera starten';
+            setStatus('Kamerafehler');
+        }
+    };
+
+    applyExerciseLabels();
+    updateUI();
+})();
+</script>
+</body>
+</html>
