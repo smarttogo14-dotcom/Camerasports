@@ -2,11 +2,37 @@
 <html lang="de">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#111111">
     <title>Übungs-Zähler</title>
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: sans-serif; background: #111; color: #fff; min-height: 100vh; padding: 1rem; }
+        * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+        html, body {
+            height: 100%; overflow: hidden;
+            overscroll-behavior: none;
+            -webkit-user-select: none; user-select: none;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #111; color: #fff;
+            /* Safe area insets for notch/punch-hole phones */
+            padding-top: env(safe-area-inset-top);
+            padding-bottom: env(safe-area-inset-bottom);
+            padding-left: env(safe-area-inset-left);
+            padding-right: env(safe-area-inset-right);
+        }
+        /* Scrollable inner container */
+        #scroll-wrap {
+            height: 100vh;
+            height: 100dvh; /* dynamic viewport height — handles Android chrome bar */
+            overflow-y: auto;
+            overflow-x: hidden;
+            -webkit-overflow-scrolling: touch;
+            padding: 1rem;
+        }
         #app { max-width: 520px; margin: 0 auto; padding: 1rem 0; }
 
         /* ── EXERCISE PICKER ── */
@@ -18,6 +44,8 @@
             background: #1a1a1a; color: #aaa; font-size: 13px; cursor: pointer;
             display: flex; flex-direction: column; align-items: center; gap: 6px;
             transition: all 0.15s;
+            min-height: 72px; touch-action: manipulation;
+            -webkit-user-select: none; user-select: none;
         }
         .ex-btn .ex-icon { font-size: 1.6rem; }
         .ex-btn:hover { border-color: #555; color: #fff; background: #222; }
@@ -95,9 +123,12 @@
 
         /* ── CONTROLS ── */
         button.main {
-            width: 100%; padding: 10px; border-radius: 8px; font-size: 14px;
+            width: 100%; padding: 14px; border-radius: 8px; font-size: 15px;
             cursor: pointer; margin-bottom: 0.75rem;
             background: transparent; color: #fff; border: 0.5px solid #555;
+            min-height: 48px; /* Android touch target minimum */
+            -webkit-user-select: none; user-select: none;
+            touch-action: manipulation;
         }
         button.main:hover { background: #1a1a1a; }
         button.main:disabled { opacity: 0.5; cursor: default; }
@@ -126,6 +157,7 @@
     </style>
 </head>
 <body>
+<div id="scroll-wrap">
 <div id="app">
 
     <!-- EXERCISE PICKER -->
@@ -771,19 +803,26 @@
     // ─────────────────────────────────────────────────────────────────────────
     document.querySelectorAll('.ex-btn').forEach(btn => {
         btn.onclick = () => {
-            if (running) return;
             document.querySelectorAll('.ex-btn').forEach(b => b.classList.remove('selected'));
             btn.classList.add('selected');
             selectedEx = btn.dataset.ex;
             applyExerciseLabels();
+            // Reset alles
             calibrated = false; baseline = null;
             count = 0; isDown = false;
             smoothScore = 0;
             targetDepth = 0; smoothDepth = 0;
+            window._poseLostCount = 0;
             updateUI();
             document.getElementById('calib-btn').textContent = 'Jetzt kalibrieren';
             document.getElementById('calib-btn').style.borderColor = '';
             document.getElementById('calib-btn').style.color = '';
+            // Wenn Kamera läuft: Countdown neu starten
+            if (running) {
+                stopCountdown();
+                setStatus('📌 ' + EXERCISES[selectedEx].labels.calib);
+                setTimeout(() => startCountdown(), 300);
+            }
         };
     });
 
@@ -827,8 +866,7 @@
             btn.textContent = 'Läuft…';
             running = true;
 
-            // Lock exercise picker
-            document.querySelectorAll('.ex-btn').forEach(b => b.disabled = true);
+            // Kein Lock — Übung kann jederzeit gewechselt werden
 
             document.getElementById('calib-hint').style.display = '';
             document.getElementById('calib-btn').style.display  = '';
@@ -915,7 +953,50 @@
     // Init
     applyExerciseLabels();
     updateUI();
+
+    // ── Capacitor / native bridge ─────────────────────────────────────────
+    // Vibrate on rep count (works on Android via Capacitor Haptics)
+    const _origTriggerFlash = triggerFlash;
+    window.triggerFlash = function() {
+        _origTriggerFlash();
+        try {
+            // Web Vibration API — works in Capacitor WebView on Android
+            if (navigator.vibrate) navigator.vibrate([60, 30, 60]);
+        } catch(e) {}
+    };
+
+    // Lock screen orientation to portrait (Capacitor ScreenOrientation plugin
+    // handles this natively; the browser hint below works as fallback)
+    try {
+        if (screen.orientation && screen.orientation.lock) {
+            screen.orientation.lock('portrait').catch(() => {});
+        }
+    } catch(e) {}
+
+    // Hide Android status bar via Capacitor StatusBar plugin if available
+    document.addEventListener('deviceready', () => {
+        if (window.StatusBar) window.StatusBar.hide();
+    });
 })();
 </script>
+
+<!-- Capacitor runtime (injected automatically when built with cap sync,
+     safe to leave here — does nothing in plain browser) -->
+<script>
+    // Prevent double-tap zoom on Android
+    let lastTouch = 0;
+    document.addEventListener('touchend', e => {
+        const now = Date.now();
+        if (now - lastTouch < 300) e.preventDefault();
+        lastTouch = now;
+    }, { passive: false });
+
+    // Pull-to-refresh deaktivieren
+    document.addEventListener('touchmove', e => {
+        if (e.touches.length === 1) e.preventDefault();
+    }, { passive: false });
+</script>
+</div> <!-- /scroll-wrap -->
+</div> <!-- /app -->
 </body>
 </html>
