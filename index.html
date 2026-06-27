@@ -22,11 +22,32 @@
         .ex-btn .ex-icon { font-size: 1.6rem; }
         .ex-btn:hover { border-color: #555; color: #fff; background: #222; }
         .ex-btn.selected { border-color: #378add; color: #378add; background: rgba(55,138,221,0.1); }
+        .ex-btn:disabled { opacity: 0.4; cursor: default; }
 
         /* ── CAM ── */
         #cam-wrap { position: relative; width: 100%; aspect-ratio: 4/3; background: #000; border-radius: 12px; overflow: hidden; margin-bottom: 1rem; }
         #v { width: 100%; height: 100%; object-fit: cover; display: block; transform: scaleX(-1); }
         #overlay { position: absolute; inset: 0; pointer-events: none; transform: scaleX(-1); width: 100%; height: 100%; }
+
+        /* Countdown overlay */
+        #calib-countdown {
+            position: absolute; inset: 0;
+            display: none; flex-direction: column;
+            align-items: center; justify-content: center;
+            background: rgba(0,0,0,0.55);
+            z-index: 20;
+        }
+        #calib-countdown.active { display: flex; }
+        #cd-number {
+            font-size: 5rem; font-weight: 700; color: #fff;
+            line-height: 1; text-shadow: 0 0 30px rgba(55,138,221,0.9);
+            transition: transform 0.15s;
+        }
+        #cd-number.pulse { transform: scale(1.35); }
+        #cd-label { font-size: 14px; color: rgba(255,255,255,0.7); margin-top: 8px; text-align: center; padding: 0 20px; }
+        #cd-pose-check { font-size: 12px; margin-top: 10px; padding: 4px 14px; border-radius: 20px; }
+        #cd-pose-check.ok  { background: rgba(76,175,80,0.25); color: #4caf50; border: 0.5px solid #4caf50; }
+        #cd-pose-check.bad { background: rgba(255,150,0,0.2);  color: #ff9600; border: 0.5px solid #ff9600; }
 
         #counter-badge {
             position: absolute; top: 12px; right: 12px;
@@ -42,6 +63,7 @@
             position: absolute; bottom: 12px; left: 12px;
             background: rgba(0,0,0,0.6); border-radius: 20px;
             padding: 4px 12px; font-size: 12px; color: rgba(255,255,255,0.8);
+            max-width: calc(100% - 24px);
         }
         #ex-badge {
             position: absolute; top: 12px; left: 12px;
@@ -56,6 +78,16 @@
             color: rgba(255,255,255,0.75); line-height: 1.8;
             display: none;
         }
+        /* Confidence indicator dots */
+        #conf-dots {
+            position: absolute; bottom: 40px; right: 12px;
+            display: none; flex-direction: column; gap: 4px; align-items: flex-end;
+        }
+        .conf-dot-row { display: flex; align-items: center; gap: 5px; }
+        .conf-dot { width: 8px; height: 8px; border-radius: 50%; background: #333; }
+        .conf-dot.ok { background: #4caf50; }
+        .conf-dot.warn { background: #ff9600; }
+        .conf-dot-label { font-size: 10px; color: rgba(255,255,255,0.5); }
 
         /* ── DEPTH BAR ── */
         #depth-track { width: 100%; height: 5px; background: #222; border-radius: 3px; margin-top: -6px; margin-bottom: 10px; overflow: hidden; }
@@ -85,6 +117,12 @@
         .bar-bg { flex: 1; height: 10px; background: #222; border-radius: 5px; border: 0.5px solid #333; overflow: hidden; }
         .bar-fill { height: 100%; width: 0%; border-radius: 5px; transition: width 0.08s; }
         .bar-val { font-size: 12px; color: #aaa; min-width: 36px; text-align: right; }
+
+        /* ── SENSITIVITY SLIDER ── */
+        #sens-row { display: flex; align-items: center; gap: 10px; margin-bottom: 0.75rem; display: none; }
+        #sens-row label { font-size: 12px; color: #666; min-width: 80px; }
+        #sens-slider { flex: 1; accent-color: #378add; }
+        #sens-val { font-size: 12px; color: #aaa; min-width: 30px; text-align: right; }
     </style>
 </head>
 <body>
@@ -110,6 +148,17 @@
     <div id="cam-wrap">
         <video id="v" autoplay playsinline muted></video>
         <canvas id="overlay"></canvas>
+
+        <!-- Countdown overlay -->
+        <div id="calib-countdown">
+            <div id="cd-number">10</div>
+            <div id="cd-label">Startposition einnehmen</div>
+            <div id="cd-pose-check" class="bad">Pose nicht erkannt</div>
+        </div>
+
+        <!-- Confidence dots -->
+        <div id="conf-dots"></div>
+
         <div id="counter-badge">
             <svg id="ring-svg" viewBox="0 0 72 72" xmlns="http://www.w3.org/2000/svg">
                 <circle id="ring-circle" cx="36" cy="36" r="32" fill="rgba(0,0,0,0.6)" stroke="#378add" stroke-width="4"/>
@@ -118,17 +167,26 @@
             <span id="count-label">reps</span>
         </div>
         <div id="ex-badge"></div>
-        <div id="status-pill">Übung wählen & Kamera starten</div>
+        <div id="status-pill">Übung wählen &amp; Kamera starten</div>
         <div id="debug-box">
             <div>Score: <span id="d-score">—</span></div>
             <div>Phase: <span id="d-phase">—</span></div>
+            <div>Konfidenz: <span id="d-conf">—</span></div>
         </div>
     </div>
     <div id="depth-track"><div id="depth-fill"></div></div>
 
     <button class="main" id="start-btn">Kamera starten</button>
     <div id="calib-hint"></div>
-    <button class="main accent" id="calib-btn" style="display:none">Kalibrieren</button>
+
+    <!-- Sensitivity slider -->
+    <div id="sens-row">
+        <label>Empfindlichkeit</label>
+        <input type="range" id="sens-slider" min="0.5" max="2.0" step="0.1" value="1.0">
+        <span id="sens-val">1.0×</span>
+    </div>
+
+    <button class="main accent" id="calib-btn" style="display:none">Jetzt kalibrieren</button>
     <div class="phase-indicator" id="phases" style="display:none">
         <div class="phase-dot" id="ph-calib">Kalibriert</div>
         <div class="phase-dot" id="ph-down">↓</div>
@@ -157,157 +215,281 @@
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.min.js"></script>
 <script>
 (async () => {
-    // ─────────────────────────────────────────────────────────────────────────
-    // EXERCISE DEFINITIONS
-    // Each exercise exposes:
-    //   calibrate(kp, vidW, vidH)  → baseline object | null
-    //   getScore(kp, baseline, vidW, vidH) → { score, sig1, sig2 } | null
-    //     score: 0 = top position, 1 = fully in "down" position
-    //   thresholds: { down, up }   (score values)
-    //   labels: { calib, down, up, bar1, bar2 }
-    // ─────────────────────────────────────────────────────────────────────────
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // UTILITIES
+    // ─────────────────────────────────────────────────────────────────────────
+    function angle(a, b, c) {
+        // Angle at vertex b formed by points a-b-c (degrees)
+        const ab = { x: a.x - b.x, y: a.y - b.y };
+        const cb = { x: c.x - b.x, y: c.y - b.y };
+        const dot = ab.x * cb.x + ab.y * cb.y;
+        const mag = Math.sqrt((ab.x**2 + ab.y**2) * (cb.x**2 + cb.y**2));
+        if (mag === 0) return 0;
+        return Math.acos(Math.max(-1, Math.min(1, dot / mag))) * (180 / Math.PI);
+    }
+
+    function dist(a, b) {
+        return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
+    }
+
+    function validPts(pts, minConf) {
+        return pts.every(p => p && p.score >= minConf);
+    }
+
+    // Smooth score with EMA
+    function ema(prev, next, alpha) { return prev + (next - prev) * alpha; }
+
+    // Average confidence of a set of keypoints
+    function avgConf(pts) {
+        return pts.reduce((s, p) => s + (p ? p.score : 0), 0) / pts.length;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // EXERCISE DEFINITIONS — improved
+    // ─────────────────────────────────────────────────────────────────────────
     const EXERCISES = {
 
+        // ── PUSH-UPS ──────────────────────────────────────────────────────────
+        // Approach: Use elbow angle (shoulder-elbow-wrist) as primary signal.
+        // At top position: arms nearly straight ~160°+.
+        // At bottom: elbows bent ~70-90°.
+        // Secondary: shoulder drop (y-movement).
+        // Works for side view AND slightly front view.
         pushup: {
             name: 'Liegestütz',
             icon: '💪',
             labels: {
-                calib: 'Arme gestreckt halten (obere Position)',
+                calib: 'Arme gestreckt halten — Startposition (oben)',
                 down:  'Runter ↓',
                 up:    'Hoch ↑',
-                bar1:  'Ellbogen-Spreizung',
+                bar1:  'Ellbogen-Winkel',
                 bar2:  'Schulter-Absenkung',
             },
-            thresholds: { down: 0.38, up: 0.10 },
+            // score: 0 = arms straight (top), 1 = fully down
+            thresholds: { down: 0.55, up: 0.15 },
+            MIN_CONF: 0.25,
 
-            calibrate(kp) {
-                const lSh = kp[5], rSh = kp[6], lEl = kp[7], rEl = kp[8];
-                if (!this._valid([lSh,rSh,lEl,rEl], 0.3)) return null;
-                const shoulderPx = Math.abs(lSh.x - rSh.x);
-                if (shoulderPx < 20) return null;
+            _getKp(kp) {
+                // Try to use the better-visible side
+                const lSh = kp[5], rSh = kp[6];
+                const lEl = kp[7], rEl = kp[8];
+                const lWr = kp[9], rWr = kp[10];
+                // Pick the side with highest combined confidence
+                const lConf = (lSh?.score||0) + (lEl?.score||0) + (lWr?.score||0);
+                const rConf = (rSh?.score||0) + (rEl?.score||0) + (rWr?.score||0);
+                if (lConf >= rConf && validPts([lSh,lEl,lWr], this.MIN_CONF))
+                    return { sh: lSh, el: lEl, wr: lWr, bothSh: [lSh, rSh] };
+                if (validPts([rSh,rEl,rWr], this.MIN_CONF))
+                    return { sh: rSh, el: rEl, wr: rWr, bothSh: [lSh, rSh] };
+                return null;
+            },
+
+            calibrate(kp, vidW, vidH) {
+                const pts = this._getKp(kp);
+                if (!pts) return null;
+                const elbowAngle = angle(pts.sh, pts.el, pts.wr);
+                if (elbowAngle < 120) return null; // not in extended position
+                const shY = (
+                    ((pts.bothSh[0]?.score||0) > this.MIN_CONF ? pts.bothSh[0].y : pts.sh.y) +
+                    ((pts.bothSh[1]?.score||0) > this.MIN_CONF ? pts.bothSh[1].y : pts.sh.y)
+                ) / 2;
                 return {
-                    elbowNorm: Math.abs(lEl.x - rEl.x) / shoulderPx,
-                    shoulderY: (lSh.y + rSh.y) / 2,
-                    shoulderPx,
+                    topAngle: elbowAngle,       // ~160-180° when arms straight
+                    topShY:   shY / vidH,
                 };
             },
 
             getScore(kp, b, vidW, vidH) {
-                const lSh = kp[5], rSh = kp[6], lEl = kp[7], rEl = kp[8];
-                if (!this._valid([lSh,rSh,lEl,rEl], 0.3)) return null;
-                const shoulderPx = Math.abs(lSh.x - rSh.x);
-                if (shoulderPx < 20) return null;
-                const elbowDelta    = (Math.abs(lEl.x - rEl.x) / shoulderPx) - b.elbowNorm;
-                const shoulderDelta = ((lSh.y + rSh.y) / 2 - b.shoulderY) / vidH;
-                const score = elbowDelta * 0.75 + shoulderDelta * 0.25;
+                const pts = this._getKp(kp);
+                if (!pts) return null;
+                const elbowAngle = angle(pts.sh, pts.el, pts.wr);
+                const shY = pts.sh.y / vidH;
+                // Angle drops from ~170° to ~80° → normalize
+                const topAngle = Math.min(b.topAngle, 175);
+                const angleSig = Math.max(0, (topAngle - elbowAngle)) / (topAngle - 60);
+                // Shoulder descends as arms bend
+                const shDrop = Math.max(0, (shY - b.topShY)) / 0.08;
+                const score = angleSig * 0.7 + Math.min(1, shDrop) * 0.3;
                 return {
-                    score,
-                    sig1: Math.min(1, Math.max(0, elbowDelta / this.thresholds.down)),
-                    sig2: Math.min(1, Math.max(0, shoulderDelta / 0.04)),
+                    score: Math.min(1, Math.max(0, score)),
+                    sig1: Math.min(1, angleSig),
+                    sig2: Math.min(1, shDrop),
+                    conf: avgConf([pts.sh, pts.el, pts.wr]),
                 };
             },
 
-            _valid(pts, minScore) {
-                return pts.every(p => p && p.score >= minScore);
+            confKeypoints(kp) {
+                return {
+                    'L Schulter': kp[5], 'R Schulter': kp[6],
+                    'L Ellbogen': kp[7], 'R Ellbogen': kp[8],
+                    'L Handgel.': kp[9], 'R Handgel.': kp[10],
+                };
             },
         },
 
+        // ── SIT-UPS ──────────────────────────────────────────────────────────
+        // Approach: Trunk angle (hip-shoulder relative to vertical).
+        // Lying flat: shoulders and hips at similar Y.
+        // Sitting up: shoulder Y rises significantly above hip Y.
+        // Also use hip-shoulder-nose angle as trunk curl indicator.
         situp: {
             name: 'Situps',
             icon: '🔄',
             labels: {
-                calib: 'Flach auf den Boden legen (untere Position)',
+                calib: 'Flach hinlegen — Startposition (unten)',
                 down:  'Hoch ↑',
                 up:    'Runter ↓',
                 bar1:  'Schulter-Lift',
-                bar2:  'Hüft-Winkel',
+                bar2:  'Rumpf-Winkel',
             },
-            thresholds: { down: 0.40, up: 0.08 },
+            thresholds: { down: 0.42, up: 0.10 },
+            MIN_CONF: 0.20,
 
             calibrate(kp, vidW, vidH) {
-                const lSh = kp[5], rSh = kp[6], lHi = kp[11], rHi = kp[12];
-                if (!this._valid([lSh,rSh,lHi,rHi], 0.25)) return null;
+                const lSh = kp[5], rSh = kp[6];
+                const lHi = kp[11], rHi = kp[12];
+                const nose = kp[0];
+                if (!validPts([lSh, rSh, lHi, rHi], this.MIN_CONF)) return null;
+                const shY  = (lSh.y + rSh.y) / 2 / vidH;
+                const hiY  = (lHi.y + rHi.y) / 2 / vidH;
+                const shX  = (lSh.x + rSh.x) / 2 / vidW;
+                const hiX  = (lHi.x + rHi.x) / 2 / vidW;
+                // body must be somewhat horizontal (shY close to hiY)
+                // The difference may be small when lying flat
                 return {
-                    shoulderY: (lSh.y + rSh.y) / 2 / vidH,
-                    hipY:      (lHi.y + rHi.y) / 2 / vidH,
+                    shY, hiY, shX, hiX,
+                    bodyLen: Math.sqrt((shX - hiX)**2 + (shY - hiY)**2), // normalized
+                    noseY: (nose?.score > 0.2 ? nose.y / vidH : shY - 0.05),
                 };
             },
 
             getScore(kp, b, vidW, vidH) {
-                const lSh = kp[5], rSh = kp[6], lHi = kp[11], rHi = kp[12];
-                if (!this._valid([lSh,rSh,lHi,rHi], 0.25)) return null;
+                const lSh = kp[5], rSh = kp[6];
+                const lHi = kp[11], rHi = kp[12];
+                const nose = kp[0];
+                if (!validPts([lSh, rSh, lHi, rHi], this.MIN_CONF)) return null;
                 const shY  = (lSh.y + rSh.y) / 2 / vidH;
-                const hipY = (lHi.y + rHi.y) / 2 / vidH;
-                // When sitting up, shoulders rise → shY decreases from baseline
-                const shoulderLift = Math.max(0, b.shoulderY - shY);
-                // Hip-shoulder distance shrinks when curling up
-                const baseGap = b.shoulderY - b.hipY;  // negative (shoulders above hips when lying)
-                const curGap  = shY - hipY;
-                const hipSig  = baseGap !== 0 ? Math.max(0, (baseGap - curGap) / Math.abs(baseGap)) : 0;
-                const score   = shoulderLift * 0.6 + hipSig * 0.4;
+                const hiY  = (lHi.y + rHi.y) / 2 / vidH;
+                const noseY = (nose?.score > 0.2 ? nose.y / vidH : shY - 0.05);
+
+                // Sitting up = shoulders rise above calibration baseline
+                // If camera overhead: shoulders move toward hips in Y
+                // If camera side: shoulders Y changes significantly
+                const shLift = Math.max(0, b.shY - shY) / 0.12; // rise relative to baseline
+
+                // Hip-shoulder gap change: when curling, shoulders get closer to hips
+                const curGap   = Math.abs(shY - hiY);
+                const baseGap  = Math.abs(b.shY - b.hiY);
+                // Avoid division by zero; gap shrinks when sitting up (camera from side)
+                const gapSig   = baseGap > 0.01
+                    ? Math.max(0, (baseGap - curGap) / baseGap)
+                    : 0;
+
+                // Nose-to-hip drop: nose approaches hips when curling
+                const noseLift = Math.max(0, b.noseY - noseY) / 0.10;
+
+                const score = Math.max(shLift, noseLift) * 0.6 + gapSig * 0.4;
                 return {
-                    score,
-                    sig1: Math.min(1, shoulderLift / this.thresholds.down),
-                    sig2: Math.min(1, hipSig),
+                    score: Math.min(1, Math.max(0, score)),
+                    sig1: Math.min(1, Math.max(shLift, noseLift)),
+                    sig2: Math.min(1, gapSig),
+                    conf: avgConf([lSh, rSh, lHi, rHi]),
                 };
             },
 
-            _valid(pts, minScore) {
-                return pts.every(p => p && p.score >= minScore);
+            confKeypoints(kp) {
+                return {
+                    'L Schulter': kp[5], 'R Schulter': kp[6],
+                    'L Hüfte':    kp[11], 'R Hüfte':   kp[12],
+                    'Nase':       kp[0],
+                };
             },
         },
 
+        // ── SQUATS ────────────────────────────────────────────────────────────
+        // Approach: Knee angle (hip-knee-ankle) as primary.
+        // Standing: knee angle ~170°. Squat: ~80-90°.
+        // Secondary: hip height drop relative to calibration.
         squat: {
             name: 'Kniebeuge',
             icon: '🦵',
             labels: {
-                calib: 'Aufrecht stehen (obere Position)',
+                calib: 'Aufrecht stehen — Startposition (oben)',
                 down:  'Runter ↓',
                 up:    'Hoch ↑',
-                bar1:  'Hüft-Absenkung',
-                bar2:  'Knie-Beugung',
+                bar1:  'Knie-Winkel',
+                bar2:  'Hüft-Absenkung',
             },
-            thresholds: { down: 0.38, up: 0.08 },
+            thresholds: { down: 0.50, up: 0.12 },
+            MIN_CONF: 0.22,
+
+            _getKp(kp) {
+                const lHi = kp[11], rHi = kp[12];
+                const lKn = kp[13], rKn = kp[14];
+                const lAn = kp[15], rAn = kp[16];
+                // Prefer the side with higher confidence
+                const lConf = (lHi?.score||0) + (lKn?.score||0) + (lAn?.score||0);
+                const rConf = (rHi?.score||0) + (rKn?.score||0) + (rAn?.score||0);
+                // Also try both sides average
+                const bothHi = validPts([lHi, rHi], this.MIN_CONF - 0.02)
+                    ? { x: (lHi.x+rHi.x)/2, y: (lHi.y+rHi.y)/2, score: (lHi.score+rHi.score)/2 }
+                    : null;
+                if (lConf >= rConf && validPts([lHi,lKn,lAn], this.MIN_CONF))
+                    return { hi: lHi, kn: lKn, an: lAn, bothHi };
+                if (validPts([rHi,rKn,rAn], this.MIN_CONF))
+                    return { hi: rHi, kn: rKn, an: rAn, bothHi };
+                return null;
+            },
 
             calibrate(kp, vidW, vidH) {
-                const lHi = kp[11], rHi = kp[12], lKn = kp[13], rKn = kp[14];
-                if (!this._valid([lHi,rHi,lKn,rKn], 0.25)) return null;
+                const pts = this._getKp(kp);
+                if (!pts) return null;
+                const kneeAngle = angle(pts.hi, pts.kn, pts.an);
+                if (kneeAngle < 130) return null; // must be standing
+                const hiY = (pts.bothHi ? pts.bothHi.y : pts.hi.y) / vidH;
                 return {
-                    hipY:  (lHi.y + rHi.y) / 2 / vidH,
-                    kneeY: (lKn.y + rKn.y) / 2 / vidH,
-                    // knee-hip distance at standing
-                    kneeHipDist: ((lKn.y + rKn.y) / 2 - (lHi.y + rHi.y) / 2) / vidH,
+                    topAngle: kneeAngle,
+                    topHipY:  hiY,
+                    legLen:   Math.abs(pts.kn.y - pts.an.y) / vidH, // knee-to-ankle distance normalized
                 };
             },
 
             getScore(kp, b, vidW, vidH) {
-                const lHi = kp[11], rHi = kp[12], lKn = kp[13], rKn = kp[14];
-                if (!this._valid([lHi,rHi,lKn,rKn], 0.25)) return null;
-                const hipY  = (lHi.y + rHi.y) / 2 / vidH;
-                const kneeY = (lKn.y + rKn.y) / 2 / vidH;
-                // Hip drops when squatting → hipY increases
-                const hipDrop   = Math.max(0, hipY - b.hipY);
-                // Knee-hip gap shrinks (knees come up relative to hips)
-                const curGap    = kneeY - hipY;
-                const kneeSig   = b.kneeHipDist > 0
-                    ? Math.max(0, (b.kneeHipDist - curGap) / b.kneeHipDist)
-                    : 0;
-                const score = hipDrop * 0.6 + kneeSig * 0.4;
+                const pts = this._getKp(kp);
+                if (!pts) return null;
+                const kneeAngle = angle(pts.hi, pts.kn, pts.an);
+                const hiY = (pts.bothHi ? pts.bothHi.y : pts.hi.y) / vidH;
+
+                const topAngle = Math.min(b.topAngle, 178);
+                // knee angle drops from ~170° toward ~80°
+                const angleSig = Math.max(0, (topAngle - kneeAngle)) / (topAngle - 75);
+
+                // Hip drops when squatting
+                const hipDrop = Math.max(0, (hiY - b.topHipY)) / (b.legLen * 0.5 || 0.08);
+
+                const score = angleSig * 0.65 + Math.min(1, hipDrop) * 0.35;
                 return {
-                    score,
-                    sig1: Math.min(1, hipDrop / this.thresholds.down),
-                    sig2: Math.min(1, kneeSig),
+                    score: Math.min(1, Math.max(0, score)),
+                    sig1: Math.min(1, angleSig),
+                    sig2: Math.min(1, hipDrop),
+                    conf: avgConf([pts.hi, pts.kn, pts.an]),
                 };
             },
 
-            _valid(pts, minScore) {
-                return pts.every(p => p && p.score >= minScore);
+            confKeypoints(kp) {
+                return {
+                    'L Hüfte':   kp[11], 'R Hüfte':   kp[12],
+                    'L Knie':    kp[13], 'R Knie':    kp[14],
+                    'L Knöchel': kp[15], 'R Knöchel': kp[16],
+                };
             },
         },
     };
 
-    // ── State ────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
+    // STATE
+    // ─────────────────────────────────────────────────────────────────────────
     let selectedEx   = 'pushup';
     let count        = 0;
     let isDown       = false;
@@ -316,8 +498,18 @@
     let calibrated   = false;
     let baseline     = null;
     let lastPoses    = null;
+    let smoothScore  = 0;        // EMA-smoothed score
+    let sensitivity  = 1.0;
 
-    // ── Ring rAF ─────────────────────────────────────────────────────────────
+    // Countdown state
+    let countdownActive = false;
+    let countdownTimer  = null;
+    let cdSec           = 10;
+    let cdPoseOk        = false;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // RING ANIMATION
+    // ─────────────────────────────────────────────────────────────────────────
     const svg    = document.getElementById('ring-svg');
     const circle = document.getElementById('ring-circle');
     let targetDepth = 0, smoothDepth = 0, flashT = 0;
@@ -358,7 +550,9 @@
 
     function triggerFlash() { flashT = 1; }
 
-    // ── Helpers ──────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
+    // UI HELPERS
+    // ─────────────────────────────────────────────────────────────────────────
     function setStatus(msg, color) {
         const p = document.getElementById('status-pill');
         p.textContent = msg;
@@ -379,8 +573,27 @@
         const ex = EXERCISES[selectedEx];
         document.getElementById('bar1-label').textContent = ex.labels.bar1;
         document.getElementById('bar2-label').textContent = ex.labels.bar2;
-        document.getElementById('calib-hint').textContent = ex.labels.calib;
+        document.getElementById('calib-hint').textContent = '📌 ' + ex.labels.calib;
         document.getElementById('ex-badge').textContent  = ex.icon + ' ' + ex.name;
+    }
+
+    function updateConfDots(kp) {
+        const ex = EXERCISES[selectedEx];
+        const pts = ex.confKeypoints(kp);
+        const container = document.getElementById('conf-dots');
+        container.innerHTML = '';
+        Object.entries(pts).forEach(([name, pt]) => {
+            const row = document.createElement('div');
+            row.className = 'conf-dot-row';
+            const dot = document.createElement('div');
+            const conf = pt?.score || 0;
+            dot.className = 'conf-dot ' + (conf >= 0.35 ? 'ok' : conf >= 0.20 ? 'warn' : '');
+            const label = document.createElement('div');
+            label.className = 'conf-dot-label';
+            label.textContent = name;
+            row.append(label, dot);
+            container.appendChild(row);
+        });
     }
 
     function drawSkeleton(canvas, poses, vidW, vidH) {
@@ -390,61 +603,152 @@
         if (!poses.length) return;
         const kp = poses[0].keypoints;
         const pairs = [[5,7],[7,9],[6,8],[8,10],[5,6],[11,12],[5,11],[6,12],[11,13],[13,15],[12,14],[14,16]];
-        ctx.strokeStyle = 'rgba(55,138,221,0.7)'; ctx.lineWidth = 2;
+        ctx.lineWidth = 2;
         pairs.forEach(([i,j]) => {
             const a = kp[i], b = kp[j];
-            if (a && b && a.score > 0.25 && b.score > 0.25) {
+            if (a && b && a.score > 0.22 && b.score > 0.22) {
+                const alpha = Math.min(1, (Math.min(a.score, b.score) - 0.22) / 0.3 + 0.4);
+                ctx.strokeStyle = `rgba(55,138,221,${alpha.toFixed(2)})`;
                 ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
             }
         });
         kp.forEach(p => {
-            if (p && p.score > 0.25) {
+            if (p && p.score > 0.22) {
+                const alpha = Math.min(1, (p.score - 0.22) / 0.3 + 0.4);
                 ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, 2*Math.PI);
-                ctx.fillStyle = '#fff'; ctx.fill();
-                ctx.strokeStyle = '#378add'; ctx.lineWidth = 2; ctx.stroke();
+                ctx.fillStyle = `rgba(255,255,255,${alpha.toFixed(2)})`;
+                ctx.fill();
+                ctx.strokeStyle = `rgba(55,138,221,${alpha.toFixed(2)})`;
+                ctx.lineWidth = 2; ctx.stroke();
             }
         });
     }
 
-    // ── Exercise picker ───────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
+    // AUTO CALIBRATION COUNTDOWN
+    // ─────────────────────────────────────────────────────────────────────────
+    function startCountdown() {
+        if (countdownActive) return;
+        countdownActive = true;
+        cdSec = 10;
+        countdownActive = true;
+
+        const overlay  = document.getElementById('calib-countdown');
+        const numEl    = document.getElementById('cd-number');
+        const poseEl   = document.getElementById('cd-pose-check');
+        const labelEl  = document.getElementById('cd-label');
+
+        overlay.classList.add('active');
+        labelEl.textContent = EXERCISES[selectedEx].labels.calib;
+        numEl.textContent   = cdSec;
+
+        function tick() {
+            // Check pose during countdown
+            cdPoseOk = false;
+            if (lastPoses && lastPoses.length) {
+                const kp = lastPoses[0].keypoints;
+                const vW = lastPoses[0]._vW || 640, vH = lastPoses[0]._vH || 480;
+                const b  = EXERCISES[selectedEx].calibrate(kp, vW, vH);
+                cdPoseOk = !!b;
+            }
+            poseEl.textContent  = cdPoseOk ? '✓ Pose erkannt' : '✗ Pose nicht erkannt';
+            poseEl.className    = 'cd-pose-check ' + (cdPoseOk ? 'ok' : 'bad');
+
+            // Pulse animation
+            numEl.classList.remove('pulse');
+            void numEl.offsetWidth; // reflow
+            numEl.classList.add('pulse');
+            setTimeout(() => numEl.classList.remove('pulse'), 200);
+
+            if (cdSec <= 0) {
+                // Attempt calibration
+                overlay.classList.remove('active');
+                countdownActive = false;
+                doCalibrate();
+                return;
+            }
+            cdSec--;
+            numEl.textContent = cdSec;
+            countdownTimer = setTimeout(tick, 1000);
+        }
+
+        countdownTimer = setTimeout(tick, 1000);
+    }
+
+    function stopCountdown() {
+        if (countdownTimer) clearTimeout(countdownTimer);
+        countdownActive = false;
+        document.getElementById('calib-countdown').classList.remove('active');
+    }
+
+    function doCalibrate() {
+        if (!lastPoses || !lastPoses.length) {
+            setStatus('Kein Körper erkannt — bitte Kalibrieren drücken', 'orange');
+            return;
+        }
+        const kp = lastPoses[0].keypoints;
+        const vW = lastPoses[0]._vW || 640, vH = lastPoses[0]._vH || 480;
+        const ex = EXERCISES[selectedEx];
+        const b  = ex.calibrate(kp, vW, vH);
+        if (!b) {
+            setStatus('Pose nicht erkannt — näher zur Kamera & neu kalibrieren', 'orange');
+            document.getElementById('calib-btn').textContent = 'Neu kalibrieren';
+            return;
+        }
+        baseline   = b;
+        calibrated = true;
+        smoothScore = 0;
+        targetDepth = 0; smoothDepth = 0;
+        isDown = false;
+        document.getElementById('calib-btn').textContent    = 'Neu kalibrieren';
+        document.getElementById('calib-btn').style.borderColor = '#4caf50';
+        document.getElementById('calib-btn').style.color       = '#4caf50';
+        setPhase(null);
+        setStatus('✓ Kalibriert — los geht\'s!', '#4caf50');
+        setTimeout(() => { if (calibrated) setStatus('Bereit'); }, 1800);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // EXERCISE PICKER
+    // ─────────────────────────────────────────────────────────────────────────
     document.querySelectorAll('.ex-btn').forEach(btn => {
         btn.onclick = () => {
-            if (running) return; // lock once started
+            if (running) return;
             document.querySelectorAll('.ex-btn').forEach(b => b.classList.remove('selected'));
             btn.classList.add('selected');
             selectedEx = btn.dataset.ex;
             applyExerciseLabels();
-            // reset
             calibrated = false; baseline = null;
             count = 0; isDown = false;
+            smoothScore = 0;
             targetDepth = 0; smoothDepth = 0;
             updateUI();
-            document.getElementById('calib-btn').textContent = 'Kalibrieren';
+            document.getElementById('calib-btn').textContent = 'Jetzt kalibrieren';
             document.getElementById('calib-btn').style.borderColor = '';
             document.getElementById('calib-btn').style.color = '';
         };
     });
 
-    // ── Calibrate ─────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
+    // MANUAL CALIBRATE BUTTON
+    // ─────────────────────────────────────────────────────────────────────────
     document.getElementById('calib-btn').onclick = () => {
-        if (!lastPoses || !lastPoses.length) { setStatus('Kein Körper erkannt', 'orange'); return; }
-        const kp = lastPoses[0].keypoints;
-        const vW = lastPoses[0]._vW || 640, vH = lastPoses[0]._vH || 480;
-        const ex = EXERCISES[selectedEx];
-        const b  = ex.calibrate(kp, vW, vH);
-        if (!b) { setStatus('Pose nicht erkannt — näher zur Kamera', 'orange'); return; }
-        baseline   = b;
-        calibrated = true;
-        targetDepth = 0; smoothDepth = 0;
-        document.getElementById('calib-btn').textContent    = 'Neu kalibrieren';
-        document.getElementById('calib-btn').style.borderColor = '#4caf50';
-        document.getElementById('calib-btn').style.color       = '#4caf50';
-        setPhase(null);
-        setStatus('Kalibriert — los geht\'s!', '#4caf50');
-        setTimeout(() => setStatus('Bereit'), 1500);
+        stopCountdown();
+        doCalibrate();
     };
 
-    // ── Start camera ──────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
+    // SENSITIVITY SLIDER
+    // ─────────────────────────────────────────────────────────────────────────
+    const sensSlider = document.getElementById('sens-slider');
+    sensSlider.addEventListener('input', () => {
+        sensitivity = parseFloat(sensSlider.value);
+        document.getElementById('sens-val').textContent = sensitivity.toFixed(1) + '×';
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // START CAMERA
+    // ─────────────────────────────────────────────────────────────────────────
     document.getElementById('start-btn').onclick = async () => {
         if (running) return;
         const btn = document.getElementById('start-btn');
@@ -453,7 +757,7 @@
         applyExerciseLabels();
 
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } });
             const v = document.getElementById('v');
             v.srcObject = stream;
             await new Promise(r => v.onloadedmetadata = r);
@@ -462,7 +766,6 @@
                 poseDetection.SupportedModels.MoveNet,
                 { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING }
             );
-            setStatus('Kalibrieren nicht vergessen!');
             btn.textContent = 'Läuft…';
             running = true;
 
@@ -474,27 +777,41 @@
             document.getElementById('debug-box').style.display  = '';
             document.getElementById('phases').style.display     = '';
             document.getElementById('ex-badge').style.display   = '';
+            document.getElementById('conf-dots').style.display  = 'flex';
+            document.getElementById('sens-row').style.display   = 'flex';
 
+            // Pose detection loop
             setInterval(async () => {
                 if (!detector) return;
                 try {
                     const poses = await detector.estimatePoses(v);
                     const vW = v.videoWidth || 640, vH = v.videoHeight || 480;
                     drawSkeleton(document.getElementById('overlay'), poses, vW, vH);
-                    if (!poses.length) { setStatus('Kein Körper sichtbar'); return; }
+
+                    if (!poses.length) {
+                        setStatus('Kein Körper sichtbar');
+                        return;
+                    }
                     poses[0]._vW = vW; poses[0]._vH = vH;
                     lastPoses = poses;
+
+                    updateConfDots(poses[0].keypoints);
 
                     if (!calibrated) return;
 
                     const ex  = EXERCISES[selectedEx];
                     const res = ex.getScore(poses[0].keypoints, baseline, vW, vH);
-                    if (!res) return;
+                    if (!res) { setStatus('Pose verloren — neu kalibrieren?', '#ff9600'); return; }
 
-                    const { score, sig1, sig2 } = res;
-                    const { down: T_DOWN, up: T_UP } = ex.thresholds;
+                    const { score, sig1, sig2, conf } = res;
 
-                    targetDepth = Math.min(1, Math.max(0, score / T_DOWN));
+                    // Apply sensitivity scaling
+                    const T_DOWN = ex.thresholds.down / sensitivity;
+                    const T_UP   = ex.thresholds.up   / sensitivity;
+
+                    smoothScore = ema(smoothScore, score, 0.25);
+
+                    targetDepth = Math.min(1, Math.max(0, smoothScore / ex.thresholds.down));
                     document.getElementById('depth-fill').style.width = (targetDepth * 100).toFixed(1) + '%';
 
                     document.getElementById('bar1').style.width  = (sig1 * 100).toFixed(1) + '%';
@@ -504,32 +821,40 @@
                     document.getElementById('bar-score').style.width = (targetDepth * 100).toFixed(1) + '%';
                     document.getElementById('val-score').textContent = Math.round(targetDepth * 100) + '%';
 
-                    document.getElementById('d-score').textContent = score.toFixed(3);
+                    document.getElementById('d-score').textContent = smoothScore.toFixed(3);
                     document.getElementById('d-phase').textContent = isDown ? 'unten' : 'oben';
+                    document.getElementById('d-conf').textContent  = Math.round(conf * 100) + '%';
 
-                    if (score > T_DOWN && !isDown) {
+                    if (smoothScore > T_DOWN && !isDown) {
                         isDown = true;
                         setPhase('down');
                         setStatus(ex.labels.down, '#378add');
                     }
-                    if (score < T_UP && isDown) {
+                    if (smoothScore < T_UP && isDown) {
                         isDown = false; count++;
                         updateUI();
                         triggerFlash();
                         setPhase('up');
                         setStatus('Rep ' + count + '! ✓', '#4caf50');
-                        setTimeout(() => { setPhase(null); setStatus('Bereit'); }, 900);
+                        setTimeout(() => { setPhase(null); if (!isDown) setStatus('Bereit'); }, 900);
                     }
 
-                } catch(e) {}
-            }, 120);
+                } catch(e) { /* silently ignore per-frame errors */ }
+            }, 100); // 10 fps for detection
+
+            // Auto-calibration countdown starts after 2s (give model time to warm up)
+            setTimeout(() => {
+                setStatus('📌 ' + EXERCISES[selectedEx].labels.calib);
+                startCountdown();
+            }, 2000);
 
         } catch(e) {
             btn.disabled = false; btn.textContent = 'Kamera starten';
-            setStatus('Kamerafehler');
+            setStatus('Kamerafehler: ' + e.message);
         }
     };
 
+    // Init
     applyExerciseLabels();
     updateUI();
 })();
