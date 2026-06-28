@@ -89,9 +89,17 @@
 
         #status-pill {
             position: absolute; bottom: 12px; left: 12px;
-            background: rgba(0,0,0,0.6); border-radius: 20px;
-            padding: 4px 12px; font-size: 12px; color: rgba(255,255,255,0.8);
+            background: rgba(0,0,0,0.82);
+            border-radius: 14px;
+            border: 1.5px solid rgba(255,255,255,0.15);
+            padding: 8px 18px;
+            font-size: 18px;
+            font-weight: 700;
+            color: #fff;
             max-width: calc(100% - 24px);
+            letter-spacing: 0.01em;
+            text-shadow: 0 1px 6px rgba(0,0,0,0.8);
+            transition: color 0.2s;
         }
         #ex-badge {
             position: absolute; top: 12px; left: 12px;
@@ -296,8 +304,10 @@
             icon: '💪',
             labels: {
                 calib: 'Arme gestreckt halten — Startposition (oben)',
-                down:  'Runter ↓',
-                up:    'Hoch ↑',
+                down:  '⬇️ Runter!',
+                up:    '⬆️ Drück hoch!',
+                ready: '💪 Los geht\'s!',
+                rep:   (n) => `💪 ${n} Liegestütz!`,
                 bar1:  'Ellbogen-Winkel',
                 bar2:  'Schulter-Absenkung',
             },
@@ -379,8 +389,10 @@
             icon: '🔄',
             labels: {
                 calib: 'Flach hinlegen & Kamera von der Seite oder von oben',
-                down:  'Hoch ↑ — aufrichten!',
-                up:    'Runter ↓ — hinlegen!',
+                down:  '⬆️ Aufrichten!',
+                up:    '⬇️ Hinlegen!',
+                ready: '🔄 Los geht\'s!',
+                rep:   (n) => `🔄 ${n} Situps!`,
                 bar1:  'Nase / Schulter-Lift',
                 bar2:  'Rumpf-Streckung',
             },
@@ -504,8 +516,10 @@
             icon: '🦵',
             labels: {
                 calib: 'Aufrecht stehen — Startposition (oben)',
-                down:  'Runter ↓',
-                up:    'Hoch ↑',
+                down:  '⬇️ Tiefer!',
+                up:    '⬆️ Hochkommen!',
+                ready: '🦵 Los geht\'s!',
+                rep:   (n) => `🦵 ${n} Kniebeugen!`,
                 bar1:  'Knie-Winkel',
                 bar2:  'Hüft-Absenkung',
             },
@@ -584,8 +598,10 @@
             icon: '🏋️',
             labels: {
                 calib: 'Arme hängen lassen — Startposition (unten)',
-                down:  'Runter ↓ — Arme strecken!',
-                up:    'Hoch ↑ — Hantel heben!',
+                down:  '⬇️ Arme strecken!',
+                up:    '⬆️ Hantel heben!',
+                ready: '🏋️ Los geht\'s!',
+                rep:   (n) => `🏋️ ${n} Curls!`,
                 bar1:  'Linker Arm',
                 bar2:  'Rechter Arm',
             },
@@ -893,7 +909,7 @@
         document.getElementById('calib-btn').style.color       = '#4caf50';
         setPhase(null);
         setStatus('✓ Kalibriert — los geht\'s!', '#4caf50');
-        setTimeout(() => { if (calibrated) setStatus('Bereit'); }, 1800);
+        setTimeout(() => { if (calibrated) setStatus(EXERCISES[selectedEx].labels.ready); }, 1800);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1041,9 +1057,11 @@
                             count += reps;
                             updateUI();
                             triggerFlash();
-                            const msg = reps === 2 ? 'Beide Arme! +2 = ' + count + ' ✓' : 'Rep ' + count + '! ✓';
+                            const msg = reps === 2
+                                ? `🏋️ Beide Arme! ${count} Curls!`
+                                : ex.labels.rep(count);
                             setStatus(msg, '#4caf50');
-                            setTimeout(() => setStatus('Bereit'), 900);
+                            setTimeout(() => setStatus(ex.labels.ready), 900);
                         }
 
                         // Gesamtscore für Ring-Animation
@@ -1062,8 +1080,8 @@
                             updateUI();
                             triggerFlash();
                             setPhase('up');
-                            setStatus('Rep ' + count + '! ✓', '#4caf50');
-                            setTimeout(() => { setPhase(null); if (!isDown) setStatus('Bereit'); }, 900);
+                            setStatus(ex.labels.rep(count), '#4caf50');
+                            setTimeout(() => { setPhase(null); if (!isDown) setStatus(ex.labels.ready); }, 900);
                         }
                     }
 
