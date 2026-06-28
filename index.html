@@ -586,8 +586,8 @@
                 calib: 'Arme hängen lassen — Startposition (unten)',
                 down:  'Runter ↓ — Arme strecken!',
                 up:    'Hoch ↑ — Hantel heben!',
-                bar1:  'Ellbogen-Beugung',
-                bar2:  'Handgelenk-Lift',
+                bar1:  'Linker Arm',
+                bar2:  'Rechter Arm',
             },
             thresholds: { down: 0.50, up: 0.10 },
             MIN_CONF: 0.22,
@@ -628,27 +628,35 @@
             },
 
             getScore(kp, b, vidW, vidH) {
-                const pts = this._getKp(kp);
-                if (!pts) return null;
-                const elbowAngle = angle(pts.sh, pts.el, pts.wr);
-                const wrY = pts.wr.y / vidH;
-                const shY = pts.sh.y / vidH;
+                // Beide Arme separat auswerten
+                const lSh = kp[5], lEl = kp[7], lWr = kp[9];
+                const rSh = kp[6], rEl = kp[8], rWr = kp[10];
+                const lOk = validPts([lSh, lEl, lWr], this.MIN_CONF);
+                const rOk = validPts([rSh, rEl, rWr], this.MIN_CONF);
+                if (!lOk && !rOk) return null;
 
-                // Winkel sinkt beim Beugen: 160° → 45°
                 const bottomAngle = Math.min(b.bottomAngle, 175);
-                const angleSig = Math.max(0, (bottomAngle - elbowAngle)) / (bottomAngle - 70);
-
-                // Handgelenk steigt (Y sinkt) beim Curl
-                // Normiert an Schulter-zu-Handgelenk-Abstand unten
                 const armLen = Math.abs(b.bottomWrY - b.shY) || 0.2;
-                const wrRise = Math.max(0, (b.bottomWrY - wrY)) / armLen;
 
-                const score = angleSig * 0.70 + Math.min(1, wrRise) * 0.30;
+                function armScore(sh, el, wr) {
+                    const a = angle(sh, el, wr);
+                    const angleSig = Math.max(0, (bottomAngle - a)) / (bottomAngle - 70);
+                    const wrRise   = Math.max(0, (b.bottomWrY - wr.y / vidH)) / armLen;
+                    return Math.min(1, angleSig * 0.70 + Math.min(1, wrRise) * 0.30);
+                }
+
+                const lScore = lOk ? armScore(lSh, lEl, lWr) : 0;
+                const rScore = rOk ? armScore(rSh, rEl, rWr) : 0;
+
+                // Hauptscore = Max der beiden Arme (für Schwellenerkennung)
+                // Beide Arm-Scores einzeln zurückgeben für doppeltes Zählen
+                const score = Math.max(lScore, rScore);
                 return {
-                    score: Math.min(1, Math.max(0, score)),
-                    sig1: Math.min(1, angleSig),
-                    sig2: Math.min(1, wrRise),
-                    conf: avgConf([pts.sh, pts.el, pts.wr]),
+                    score,
+                    sig1: lScore,   // linker Arm
+                    sig2: rScore,   // rechter Arm
+                    lScore, rScore,
+                    conf: avgConf([lSh, lEl, lWr, rSh, rEl, rWr].filter(p => p?.score >= this.MIN_CONF)),
                 };
             },
 
@@ -903,6 +911,8 @@
             smoothScore = 0;
             targetDepth = 0; smoothDepth = 0;
             window._poseLostCount = 0;
+            window._lWasDown = false;
+            window._rWasDown = false;
             updateUI();
             document.getElementById('calib-btn').textContent = 'Jetzt kalibrieren';
             document.getElementById('calib-btn').style.borderColor = '';
@@ -1011,18 +1021,50 @@
                     document.getElementById('d-phase').textContent = isDown ? 'unten' : 'oben';
                     document.getElementById('d-conf').textContent  = Math.round(conf * 100) + '%';
 
-                    if (smoothScore > T_DOWN && !isDown) {
-                        isDown = true;
-                        setPhase('down');
-                        setStatus(ex.labels.down, '#378add');
-                    }
-                    if (smoothScore < T_UP && isDown) {
-                        isDown = false; count++;
-                        updateUI();
-                        triggerFlash();
-                        setPhase('up');
-                        setStatus('Rep ' + count + '! ✓', '#4caf50');
-                        setTimeout(() => { setPhase(null); if (!isDown) setStatus('Bereit'); }, 900);
+                    // ── CURL: beide Arme separat zählen ──────────────────────
+                    if (selectedEx === 'curl' && res.lScore !== undefined) {
+                        const lUp = res.lScore > T_DOWN;
+                        const rUp = res.rScore > T_DOWN;
+
+                        if (!window._lWasDown) window._lWasDown = false;
+                        if (!window._rWasDown) window._rWasDown = false;
+
+                        let reps = 0;
+                        // Linker Arm: war unten, jetzt oben → zählen
+                        if (lUp && !window._lWasDown) { window._lWasDown = true; }
+                        if (!lUp && window._lWasDown && res.lScore < T_UP) { window._lWasDown = false; reps++; }
+                        // Rechter Arm: war unten, jetzt oben → zählen
+                        if (rUp && !window._rWasDown) { window._rWasDown = true; }
+                        if (!rUp && window._rWasDown && res.rScore < T_UP) { window._rWasDown = false; reps++; }
+
+                        if (reps > 0) {
+                            count += reps;
+                            updateUI();
+                            triggerFlash();
+                            const msg = reps === 2 ? 'Beide Arme! +2 = ' + count + ' ✓' : 'Rep ' + count + '! ✓';
+                            setStatus(msg, '#4caf50');
+                            setTimeout(() => setStatus('Bereit'), 900);
+                        }
+
+                        // Gesamtscore für Ring-Animation
+                        isDown = lUp || rUp;
+                        if (isDown) setPhase('down'); else setPhase(null);
+
+                    } else {
+                        // ── Alle anderen Übungen: normales Zählen ────────────
+                        if (smoothScore > T_DOWN && !isDown) {
+                            isDown = true;
+                            setPhase('down');
+                            setStatus(ex.labels.down, '#378add');
+                        }
+                        if (smoothScore < T_UP && isDown) {
+                            isDown = false; count++;
+                            updateUI();
+                            triggerFlash();
+                            setPhase('up');
+                            setStatus('Rep ' + count + '! ✓', '#4caf50');
+                            setTimeout(() => { setPhase(null); if (!isDown) setStatus('Bereit'); }, 900);
+                        }
                     }
 
                 } catch(e) { /* silently ignore per-frame errors */ }
